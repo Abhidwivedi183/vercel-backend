@@ -1,65 +1,57 @@
-const port = 4000;
+// Vercel-compatible Express serverless backend
 const express = require("express");
-const app = express();
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
-const path = require("path");
 const cors = require("cors");
+const dotenv = require("dotenv");
+const serverless = require("serverless-http");
 
+dotenv.config();
+const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Centralized Error Handling Middleware
-const errorHandler = (err, req, res, next) => {
-  console.error(err.stack);
-  res.status(err.statusCode || 500).json({ success: false, message: err.message || "Internal Server Error" });
-};
+// MongoDB Connection (use MongoDB Atlas)
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log("MongoDB connected"))
+.catch((err) => console.error("MongoDB connection error:", err));
 
-// Database Connection With MongoDB
-mongoose.connect("mongodb://localhost:27017/e-commerce")
-  .then(() => console.log("Database connected"))
-  .catch((err) => console.error("Database connection error:", err));
-
-// Image Storage Engine
-const storage = multer.diskStorage({
-  destination: './upload/images',
-  filename: (req, file, cb) => {
-    return cb(null, `${file.fieldname}_${Date.now()}${path.extname(file.originalname)}`);
-  }
-});
+// In-memory image upload placeholder (Vercel doesn't allow disk write)
+const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-app.post("/upload", upload.single('product'), (req, res, next) => {
+app.post("/upload", upload.single("product"), (req, res) => {
   try {
-    res.json({ success: 1, image_url: `http://localhost:4000/images/${req.file.filename}` });
+    // Simulate image upload success (You can integrate Cloudinary here)
+    res.json({ success: 1, image_url: "https://via.placeholder.com/150" });
   } catch (error) {
-    next(error);
+    res.status(500).json({ success: 0, error: error.message });
   }
 });
-
-app.use('/images', express.static('upload/images'));
 
 const fetchuser = async (req, res, next) => {
   const token = req.header("auth-token");
-  if (!token) {
-    return res.status(401).json({ errors: "Please authenticate using a valid token" });
-  }
+  if (!token) return res.status(401).json({ errors: "Please authenticate using a valid token" });
   try {
-    const data = jwt.verify(token, "secret_ecom");
+    const data = jwt.verify(token, process.env.JWT_SECRET);
     req.user = data.user;
     next();
   } catch (error) {
-    next(error);
+    return res.status(401).json({ errors: "Invalid token" });
   }
 };
 
+// Models
 const Users = mongoose.model("Users", {
   name: String,
   email: { type: String, unique: true },
   password: String,
   cartData: Object,
-  date: { type: Date, default: Date.now }
+  date: { type: Date, default: Date.now },
 });
 
 const Product = mongoose.model("Product", {
@@ -70,26 +62,27 @@ const Product = mongoose.model("Product", {
   new_price: Number,
   old_price: Number,
   date: { type: Date, default: Date.now },
-  avilable: { type: Boolean, default: true }
+  avilable: { type: Boolean, default: true },
 });
 
-app.get("/", (req, res) => res.send("Root"));
+// Routes
+app.get("/", (req, res) => res.send("Backend API Root"));
 
-app.post('/login', async (req, res, next) => {
+app.post("/login", async (req, res) => {
   try {
     const user = await Users.findOne({ email: req.body.email });
     if (user && req.body.password === user.password) {
-      const token = jwt.sign({ user: { id: user.id } }, 'secret_ecom');
+      const token = jwt.sign({ user: { id: user.id } }, process.env.JWT_SECRET);
       res.json({ success: true, token });
     } else {
       res.status(400).json({ success: false, errors: "Incorrect email or password" });
     }
   } catch (error) {
-    next(error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.post('/signup', async (req, res, next) => {
+app.post("/signup", async (req, res) => {
   try {
     const existingUser = await Users.findOne({ email: req.body.email });
     if (existingUser) {
@@ -97,54 +90,59 @@ app.post('/signup', async (req, res, next) => {
     }
     let cart = {};
     for (let i = 0; i < 300; i++) cart[i] = 0;
-    const user = new Users({ name: req.body.username, email: req.body.email, password: req.body.password, cartData: cart });
+    const user = new Users({
+      name: req.body.username,
+      email: req.body.email,
+      password: req.body.password,
+      cartData: cart,
+    });
     await user.save();
-    const token = jwt.sign({ user: { id: user.id } }, 'secret_ecom');
+    const token = jwt.sign({ user: { id: user.id } }, process.env.JWT_SECRET);
     res.json({ success: true, token });
   } catch (error) {
-    next(error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.get("/allproducts", async (req, res, next) => {
+app.get("/allproducts", async (req, res) => {
   try {
     const products = await Product.find({});
     res.send(products);
   } catch (error) {
-    next(error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.get("/newcollections", async (req, res, next) => {
+app.get("/newcollections", async (req, res) => {
   try {
     const products = await Product.find({});
     res.send(products.slice(1).slice(-8));
   } catch (error) {
-    next(error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.get("/popularinwomen", async (req, res, next) => {
+app.get("/popularinwomen", async (req, res) => {
   try {
     const products = await Product.find({});
-    res.send(products.splice(0, 4));
+    res.send(products.slice(0, 4));
   } catch (error) {
-    next(error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/addtocart', fetchuser, async (req, res, next) => {
+app.post("/addtocart", fetchuser, async (req, res) => {
   try {
     const user = await Users.findById(req.user.id);
     user.cartData[req.body.itemId] += 1;
     await Users.findByIdAndUpdate(req.user.id, { cartData: user.cartData });
     res.send("Added");
   } catch (error) {
-    next(error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/removefromcart', fetchuser, async (req, res, next) => {
+app.post("/removefromcart", fetchuser, async (req, res) => {
   try {
     const user = await Users.findById(req.user.id);
     if (user.cartData[req.body.itemId] > 0) {
@@ -153,20 +151,20 @@ app.post('/removefromcart', fetchuser, async (req, res, next) => {
     await Users.findByIdAndUpdate(req.user.id, { cartData: user.cartData });
     res.send("Removed");
   } catch (error) {
-    next(error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/getcart', fetchuser, async (req, res, next) => {
+app.post("/getcart", fetchuser, async (req, res) => {
   try {
     const user = await Users.findById(req.user.id);
     res.json(user.cartData);
   } catch (error) {
-    next(error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-app.post("/addproduct", async (req, res, next) => {
+app.post("/addproduct", async (req, res) => {
   try {
     const products = await Product.find({});
     const id = products.length > 0 ? products[products.length - 1].id + 1 : 1;
@@ -174,22 +172,18 @@ app.post("/addproduct", async (req, res, next) => {
     await product.save();
     res.json({ success: true, name: req.body.name });
   } catch (error) {
-    next(error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.post("/removeproduct", async (req, res, next) => {
+app.post("/removeproduct", async (req, res) => {
   try {
     await Product.findOneAndDelete({ id: req.body.id });
     res.json({ success: true, name: req.body.name });
   } catch (error) {
-    next(error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.use(errorHandler);
-
-app.listen(port, (error) => {
-  if (!error) console.log("Server Running on port " + port);
-  else console.log("Error : ", error);
-});
+module.exports = app;
+module.exports.handler = serverless(app);
